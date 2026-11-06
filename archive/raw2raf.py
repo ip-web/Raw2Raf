@@ -14,7 +14,7 @@ Pipeline:
      modeled directly after the GFX 100S II RAF structure.
   4. (Optional) Verify the resulting RAF file by converting it back with dnglab.
 
-Author: Google DeepMind Advanced Agentic Coding Pair
+Author: IPWeb
 """
 
 import os

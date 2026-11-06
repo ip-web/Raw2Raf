@@ -1,8 +1,8 @@
 [package]
 name = "raw2raf"
-version = "0.2.0"
+version = "1.0.0"
 edition = "2021"
-authors = ["Google DeepMind Advanced Agentic Coding Pair"]
+authors = ["IPWeb"]
 description = "Fast RAW to Fujifilm GFX 100S II RAF converter in Rust"
 
 [dependencies]

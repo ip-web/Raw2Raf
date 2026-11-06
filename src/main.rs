@@ -21,8 +21,8 @@ use crate::repack::RepackMode;
 #[derive(Parser, Debug)]
 #[command(
     name = "raw2raf",
-    author = "Google DeepMind Advanced Agentic Coding Pair",
-    version,
+    author = "IPWeb",
+    version = "1.0.0",
     about = "Ultra-fast camera RAW to Fujifilm GFX 100S II RAF converter in Rust.",
     after_help = "Single-file mode:\n  raw2raf IMG_001.ARW [IMG_001.raf]\n\nBatch mode (recursive folder):\n  raw2raf --batch /path/to/raws --output-dir /path/to/output\n  raw2raf --batch /path/to/raws            # output alongside source files"
 )]
