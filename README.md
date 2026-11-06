@@ -199,11 +199,15 @@ Options:
 
 ---
 
-## Container Setup
+## Container Setup & Donor-Container Architecture
 
-Fujifilm Bayer RAF containers serve as the structural envelope for repacked raw streams. For testing:
-- Place reference `.RAF` container files (e.g. genuine uncompressed samples from `GFX 100S II`, `GFX 50S II`, `X-T200`, `X-A3`) in a `container/` directory.
-- `Raw2Raf` dynamically parses container headers, preview blocks, and CFA metadata directories to construct structurally authentic RAF files.
+`Raw2Raf` intentionally uses a **donor-container architecture** rather than synthesizing proprietary camera files from scratch:
+- **Authentic Structural Envelope**: Downstream RAW engines (such as Capture One and Lightroom) validate camera files against strict, proprietary maker notes and camera profile signatures. Repacking into genuine reference `.RAF` files provided by the user guarantees complete format authenticity.
+- **Intellectual Property & Clean Design**: `Raw2Raf` does not generate, redistribute, or reverse-synthesize proprietary manufacturer data structures from scratch. The user provides their own reference donor RAF containers (from their camera or sample files), and `Raw2Raf` maps sensor data into that envelope.
+
+### How to configure containers:
+- Place one or more authentic uncompressed `.RAF` container files (e.g. `GFX 100S II`, `GFX 50S II`, `X-T200`, `X-A3`) in a local `container/` folder, or specify them via `--container <PATH>`.
+- `Raw2Raf` dynamically inspects the available containers in the pool and selects the best-fitting donor based on input resolution and bit depth.
 
 ---
 
