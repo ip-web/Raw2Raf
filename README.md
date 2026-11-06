@@ -210,3 +210,9 @@ Fujifilm Bayer RAF containers serve as the structural envelope for repacked raw 
 ## Disclaimer
 
 This software is an independent research project developed for **technical evaluation, color profile testing, sensor layout benchmarking, and educational purposes**. Fujifilm, GFX, X-Trans, and related camera marks are trademarks of FUJIFILM Corporation. This project is not affiliated with, endorsed by, or sponsored by FUJIFILM Corporation.
+
+---
+
+## License
+
+This project is licensed under the **GNU General Public License v3.0** (GPL-3.0). See the [LICENSE](LICENSE) file for the full license text.
