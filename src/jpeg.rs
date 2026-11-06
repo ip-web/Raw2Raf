@@ -171,7 +171,90 @@ pub fn extract_raw_preview<P: AsRef<Path>>(raw_path: P, exiftool_path: Option<&s
         }
     }
 
-    // Method 2: Fast direct binary scan of up to 64MB
+/// Sequentially parses JPEG segment markers to find the true bounds of an embedded JPEG stream.
+/// Correctly navigates length headers for APP/COM/DQT/DHT segments and scan entropy data,
+/// preventing premature termination on \xff\xd9 bytes occurring inside metadata or thumbnails.
+fn find_jpeg_stream(buf: &[u8], start_idx: usize) -> Option<(usize, usize)> {
+    let mut i = start_idx;
+    while i + 3 < buf.len() {
+        if buf[i] == 0xff && buf[i + 1] == 0xd8 && buf[i + 2] == 0xff {
+            let soi = i;
+            let mut curr = i + 2;
+            let mut has_sof = false;
+
+            while curr + 1 < buf.len() {
+                if buf[curr] != 0xff {
+                    curr += 1;
+                    continue;
+                }
+                while curr < buf.len() && buf[curr] == 0xff {
+                    curr += 1;
+                }
+                if curr >= buf.len() {
+                    break;
+                }
+                let marker = buf[curr];
+                curr += 1;
+
+                if marker == 0xd9 {
+                    // EOI
+                    if has_sof && (curr - soi) > 16384 {
+                        return Some((soi, curr));
+                    }
+                    break;
+                } else if marker == 0xd8 || (0xd0..=0xd7).contains(&marker) {
+                    // Standalone markers without length
+                    continue;
+                } else if marker == 0xda {
+                    // Start of Scan: skip SOS header length, then parse entropy stream
+                    if curr + 2 > buf.len() {
+                        break;
+                    }
+                    let len = u16::from_be_bytes([buf[curr], buf[curr + 1]]) as usize;
+                    curr += len;
+                    while curr + 1 < buf.len() {
+                        if buf[curr] == 0xff {
+                            let next = buf[curr + 1];
+                            if next == 0x00 || (0xd0..=0xd7).contains(&next) {
+                                curr += 2;
+                            } else if next == 0xd9 {
+                                curr += 2;
+                                if has_sof && (curr - soi) > 16384 {
+                                    return Some((soi, curr));
+                                }
+                                break;
+                            } else if next != 0xff {
+                                curr += 1;
+                                break;
+                            } else {
+                                curr += 1;
+                            }
+                        } else {
+                            curr += 1;
+                        }
+                    }
+                } else if curr + 2 <= buf.len() {
+                    let len = u16::from_be_bytes([buf[curr], buf[curr + 1]]) as usize;
+                    if marker == 0xc0 || marker == 0xc2 {
+                        has_sof = true;
+                    }
+                    if len < 2 {
+                        break;
+                    }
+                    curr += len;
+                } else {
+                    break;
+                }
+            }
+            i = soi + 2;
+        } else {
+            i += 1;
+        }
+    }
+    None
+}
+
+    // Method 2: Fast direct binary scan of up to 64MB using structured marker navigation
     if let Ok(mut f) = File::open(raw_path_ref) {
         let max_scan = 64 * 1024 * 1024;
         let mut buf = Vec::new();
@@ -181,43 +264,13 @@ pub fn extract_raw_preview<P: AsRef<Path>>(raw_path: P, exiftool_path: Option<&s
         let mut largest_len = 0usize;
         let mut start = 0usize;
 
-        while start + 4 < buf.len() {
-            // Find SOI
-            let mut pos = None;
-            for i in start..buf.len().saturating_sub(3) {
-                if &buf[i..i + 3] == b"\xff\xd8\xff" {
-                    pos = Some(i);
-                    break;
-                }
+        while let Some((p, end)) = find_jpeg_stream(&buf, start) {
+            let length = end - p;
+            if length > largest_len {
+                largest_len = length;
+                largest_jpeg = Some(buf[p..end].to_vec());
             }
-            let p = match pos {
-                Some(val) => val,
-                None => break,
-            };
-
-            // Find EOI
-            let mut eoi = None;
-            for i in (p + 2)..buf.len().saturating_sub(1) {
-                if &buf[i..i + 2] == b"\xff\xd9" {
-                    eoi = Some(i);
-                    break;
-                }
-            }
-
-            if let Some(e) = eoi {
-                let length = (e + 2) - p;
-                if length > 16384 && length > largest_len {
-                    let candidate = &buf[p..e + 2];
-                    // Check for SOF0 or SOF2 marker
-                    if candidate.windows(2).any(|w| w == b"\xff\xc0" || w == b"\xff\xc2") {
-                        largest_len = length;
-                        largest_jpeg = Some(candidate.to_vec());
-                    }
-                }
-                start = e + 2;
-            } else {
-                break;
-            }
+            start = end;
         }
 
         if largest_jpeg.is_some() {

@@ -149,9 +149,46 @@ fn gcd(mut a: usize, mut b: usize) -> usize {
 
 /// Packs 14-bit pixel values into 32-bit byte-reversed (MSB32) big-endian bitstream.
 /// Matches Fujifilm hardware decompress_14be_msb32 format (16 pixels in 28 bytes).
+/// Properly handles trailing remainder pixels so no scanline tail data is dropped.
 pub fn pack_14be_msb32(pixels: &[u16]) -> Vec<u8> {
     let mut out = Vec::with_capacity((pixels.len() * 14).div_ceil(8));
-    for p in pixels.chunks_exact(16) {
+    let chunks = pixels.chunks_exact(16);
+    let rem = chunks.remainder();
+    for p in chunks {
+        let w0: u32 = ((p[0] as u32 & 0x3fff) << 18)
+            | ((p[1] as u32 & 0x3fff) << 4)
+            | ((p[2] as u32 & 0x3fff) >> 10);
+        let w1: u32 = (((p[2] as u32 & 0x3fff) & 0x3ff) << 22)
+            | ((p[3] as u32 & 0x3fff) << 8)
+            | ((p[4] as u32 & 0x3fff) >> 6);
+        let w2: u32 = (((p[4] as u32 & 0x3fff) & 0x3f) << 26)
+            | ((p[5] as u32 & 0x3fff) << 12)
+            | ((p[6] as u32 & 0x3fff) >> 2);
+        let w3: u32 = (((p[6] as u32 & 0x3fff) & 0x3) << 30)
+            | ((p[7] as u32 & 0x3fff) << 16)
+            | ((p[8] as u32 & 0x3fff) << 2)
+            | ((p[9] as u32 & 0x3fff) >> 12);
+        let w4: u32 = (((p[9] as u32 & 0x3fff) & 0xfff) << 20)
+            | ((p[10] as u32 & 0x3fff) << 6)
+            | ((p[11] as u32 & 0x3fff) >> 8);
+        let w5: u32 = (((p[11] as u32 & 0x3fff) & 0xff) << 24)
+            | ((p[12] as u32 & 0x3fff) << 10)
+            | ((p[13] as u32 & 0x3fff) >> 4);
+        let w6: u32 = (((p[13] as u32 & 0x3fff) & 0xf) << 28)
+            | ((p[14] as u32 & 0x3fff) << 14)
+            | (p[15] as u32 & 0x3fff);
+
+        out.extend_from_slice(&w0.to_le_bytes());
+        out.extend_from_slice(&w1.to_le_bytes());
+        out.extend_from_slice(&w2.to_le_bytes());
+        out.extend_from_slice(&w3.to_le_bytes());
+        out.extend_from_slice(&w4.to_le_bytes());
+        out.extend_from_slice(&w5.to_le_bytes());
+        out.extend_from_slice(&w6.to_le_bytes());
+    }
+    if !rem.is_empty() {
+        let mut p = [0u16; 16];
+        p[..rem.len()].copy_from_slice(rem);
         let w0: u32 = ((p[0] as u32 & 0x3fff) << 18)
             | ((p[1] as u32 & 0x3fff) << 4)
             | ((p[2] as u32 & 0x3fff) >> 10);
@@ -188,9 +225,12 @@ pub fn pack_14be_msb32(pixels: &[u16]) -> Vec<u8> {
 
 /// Packs 12-bit pixel values into little-endian 12-bit packed bitstream (2 pixels in 3 bytes).
 /// Matches Fujifilm hardware decompress_12le format.
+/// Properly handles trailing remainder pixels so no scanline tail data is dropped.
 pub fn pack_12le(pixels: &[u16]) -> Vec<u8> {
     let mut out = Vec::with_capacity((pixels.len() * 12).div_ceil(8));
-    for p in pixels.chunks_exact(2) {
+    let chunks = pixels.chunks_exact(2);
+    let rem = chunks.remainder();
+    for p in chunks {
         let b0 = (p[0] & 0xff) as u8;
         let b1 = (((p[0] >> 8) & 0x0f) | ((p[1] & 0x0f) << 4)) as u8;
         let b2 = ((p[1] >> 4) & 0xff) as u8;
@@ -198,7 +238,61 @@ pub fn pack_12le(pixels: &[u16]) -> Vec<u8> {
         out.push(b1);
         out.push(b2);
     }
+    if !rem.is_empty() {
+        let p0 = rem[0];
+        let p1 = 0u16;
+        let b0 = (p0 & 0xff) as u8;
+        let b1 = (((p0 >> 8) & 0x0f) | ((p1 & 0x0f) << 4)) as u8;
+        let b2 = ((p1 >> 4) & 0xff) as u8;
+        out.push(b0);
+        out.push(b1);
+        out.push(b2);
+    }
     out
+}
+
+/// Raw payload representation that supports both packed byte vectors and
+/// zero-copy, zero-redundant-allocation 16-bit word buffers.
+pub enum RawPayload {
+    Packed(Vec<u8>),
+    Words(Vec<u16>),
+}
+
+impl RawPayload {
+    pub fn len(&self) -> usize {
+        match self {
+            RawPayload::Packed(b) => b.len(),
+            RawPayload::Words(w) => w.len() * 2,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn write_to<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        match self {
+            RawPayload::Packed(b) => writer.write_all(b),
+            RawPayload::Words(w) => {
+                #[cfg(target_endian = "little")]
+                {
+                    // Safe zero-copy transmutation: &[u16] is identical in memory to little-endian &[u8]
+                    let bytes = unsafe {
+                        std::slice::from_raw_parts(w.as_ptr() as *const u8, w.len() * 2)
+                    };
+                    writer.write_all(bytes)
+                }
+                #[cfg(not(target_endian = "little"))]
+                {
+                    for val in w {
+                        writer.write_all(&val.to_le_bytes())?;
+                    }
+                    Ok(())
+                }
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -338,29 +432,17 @@ pub fn repack<P: AsRef<Path>>(
     }
 
     // Step 3: CFA Bayer phase alignment
-    let mut shift_x = 0usize;
-    let mut shift_y = 0usize;
-    if raw_info.cfa_pattern == [1, 0, 2, 1] {
-        // GRBG -> shift x by 1 to make RGGB
-        shift_x = 1;
-        shift_y = 0;
-    } else if raw_info.cfa_pattern == [1, 2, 0, 1] {
-        // GBRG -> shift y by 1 to make RGGB
-        shift_x = 0;
-        shift_y = 1;
-    } else if raw_info.cfa_pattern == [2, 1, 1, 0] {
-        // BGGR -> shift x by 1, y by 1 to make RGGB
-        shift_x = 1;
-        shift_y = 1;
-    } else if raw_info.cfa_pattern == [3, 0, 2, 1] {
-        // ERBG (Sony DSC-F828): Emerald=3, Red=0, Blue=2, Green=1
-        // Shift x by 1 gives:
-        // Row 0: Red, Emerald(Green1)
-        // Row 1: Green2, Blue
-        // which perfectly matches standard RGGB Bayer layout!
-        shift_x = 1;
-        shift_y = 0;
-    }
+    // Locate the (x, y) phase within the 2x2 Bayer cell where the Red channel (value 0) resides.
+    // For RGGB [0, 1, 1, 2] -> (0, 0)
+    // For GRBG [1, 0, 2, 1] -> (1, 0)
+    // For GBRG [1, 2, 0, 1] -> (0, 1)
+    // For BGGR [2, 1, 1, 0] -> (1, 1)
+    // For Sony DSC-F828 ERBG [3, 0, 2, 1] -> (1, 0) -> Row 0: Red, Emerald(Green1); Row 1: Green2, Blue
+    let (red_x, red_y) = if let Some(idx) = raw_info.cfa_pattern.iter().position(|&v| v == 0) {
+        (idx % 2, idx / 2)
+    } else {
+        (0, 0)
+    };
 
     let aa_top = if raw_info.active_top > 0 { raw_info.active_top } else { 0 };
     let aa_left = if raw_info.active_left > 0 { raw_info.active_left } else { 0 };
@@ -368,22 +450,11 @@ pub fn repack<P: AsRef<Path>>(
     let crop_start_y = aa_top.max(raw_info.crop_y);
     let crop_start_x = aa_left.max(raw_info.crop_x);
 
-    let mut start_x = crop_start_x + shift_x;
-    let mut start_y = crop_start_y + shift_y;
-
-    let is_standard_bayer = raw_info.cfa_pattern.iter().all(|&v| v <= 3);
-    if is_standard_bayer {
-        // Normalize start_y to even
-        if start_y % 2 != 0 {
-            start_y += 1;
-        }
-        // Normalize start_x parity
-        if shift_x == 0 && (start_x % 2 != 0) {
-            start_x += 1;
-        } else if shift_x == 1 && (start_x % 2 == 0) {
-            start_x += 1;
-        }
-    }
+    // Compute minimal non-negative shifts so (start_x, start_y) lands exactly on a Red sensor element
+    let dx = (red_x + 2 - (crop_start_x % 2)) % 2;
+    let dy = (red_y + 2 - (crop_start_y % 2)) % 2;
+    let start_x = crop_start_x + dx;
+    let start_y = crop_start_y + dy;
 
     // Target container parameters (dynamically detected from template)
     let target_w = template.width;
@@ -417,7 +488,7 @@ pub fn repack<P: AsRef<Path>>(
     let bias_den = 100u16;
 
     // Step 5: Layout according to mode
-    let raw_payload: Vec<u8> = match opts.mode {
+    let raw_payload: RawPayload = match opts.mode {
         RepackMode::Canvas | RepackMode::Native => {
             let pad_x = if act_w < target_w { ((target_w - act_w) / 4) * 2 } else { 0 };
             let pad_y = if act_h < target_h { ((target_h - act_h) / 4) * 2 } else { 0 };
@@ -572,15 +643,11 @@ pub fn repack<P: AsRef<Path>>(
 
             // Convert canvas to packed or uncompressed bytes based on container template format
             let payload = if target_bps == 12 && !is_target_gfx {
-                pack_12le(&canvas)
+                RawPayload::Packed(pack_12le(&canvas))
             } else if target_bps == 14 && !is_target_gfx {
-                pack_14be_msb32(&canvas)
+                RawPayload::Packed(pack_14be_msb32(&canvas))
             } else {
-                let mut p = Vec::with_capacity(canvas.len() * 2);
-                for val in &canvas {
-                    p.extend_from_slice(&val.to_le_bytes());
-                }
-                p
+                RawPayload::Words(canvas)
             };
             payload
         }
@@ -687,15 +754,11 @@ pub fn repack<P: AsRef<Path>>(
             };
 
             let payload = if target_bps == 12 && !is_target_gfx {
-                pack_12le(&scaled_pixels)
+                RawPayload::Packed(pack_12le(&scaled_pixels))
             } else if target_bps == 14 && !is_target_gfx {
-                pack_14be_msb32(&scaled_pixels)
+                RawPayload::Packed(pack_14be_msb32(&scaled_pixels))
             } else {
-                let mut p = Vec::with_capacity(scaled_pixels.len() * 2);
-                for val in &scaled_pixels {
-                    p.extend_from_slice(&val.to_le_bytes());
-                }
-                p
+                RawPayload::Words(scaled_pixels)
             };
             payload
         }
@@ -766,7 +829,7 @@ pub fn repack<P: AsRef<Path>>(
         writer.write_all(&vec![0u8; gap2])?;
     }
     writer.write_all(&raw_head)?;
-    writer.write_all(&raw_payload)?;
+    raw_payload.write_to(&mut writer)?;
     writer.flush()?;
 
     Ok(())

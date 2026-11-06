@@ -94,9 +94,11 @@ impl GfxTemplate {
 
         file.seek(SeekFrom::Start(raw_off))
             .context("Seeking to template raw TIFF header")?;
-        let mut raw_head = vec![0u8; 2048];
-        file.read_exact(&mut raw_head)
-            .context("Reading template raw TIFF header (2048 bytes)")?;
+        // Read initial header block (up to 64KB) to parse IFDs and dynamically locate StripOffsets
+        let mut raw_head = vec![0u8; 65536];
+        let bytes_read = file.read(&mut raw_head)
+            .context("Reading template raw TIFF header")?;
+        raw_head.truncate(bytes_read);
 
         // Extract camera model from header string at offset 0x1c..0x3c
         let raw_model = &header[0x1c..0x3c.min(header.len())];
@@ -258,7 +260,11 @@ impl GfxTemplate {
             }
         }
 
-        if strip_offsets > 0 && strip_offsets <= raw_head.len() {
+        if strip_offsets > raw_head.len() {
+            file.seek(SeekFrom::Start(raw_off))?;
+            raw_head = vec![0u8; strip_offsets];
+            file.read_exact(&mut raw_head)?;
+        } else if strip_offsets > 0 {
             raw_head.truncate(strip_offsets);
         }
 

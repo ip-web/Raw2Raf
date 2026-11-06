@@ -160,24 +160,60 @@ pub fn read_tiff_tag_value<R: Read + Seek>(
 }
 
 /// Remosaics a 3-channel 16-bit linear RGB image into a single-channel Bayer RGGB mosaic.
+/// Applies an energy-preserving 2x2 anti-aliasing filter to suppress Nyquist fold-back,
+/// false color fringing, and moiré artifacts during downstream re-demosaicing.
 pub fn remosaic_rgb_to_bayer(rgb_u16: &[u16], width: usize, height: usize) -> Vec<u16> {
     let mut bayer = vec![0u16; width * height];
-    for y in 0..height {
-        let y_w = y * width;
-        let y_rgb = y * width * 3;
-        if y % 2 == 0 {
-            for x in (0..width).step_by(2) {
-                bayer[y_w + x] = rgb_u16[y_rgb + x * 3];
-                if x + 1 < width {
-                    bayer[y_w + x + 1] = rgb_u16[y_rgb + (x + 1) * 3 + 1];
-                }
+    let get_rgb = |x: usize, y: usize, ch: usize| -> u32 {
+        let px = x.min(width - 1);
+        let py = y.min(height - 1);
+        rgb_u16[(py * width + px) * 3 + ch] as u32
+    };
+
+    for y in (0..height).step_by(2) {
+        let y0_w = y * width;
+        let y1_w = (y + 1).min(height - 1) * width;
+
+        for x in (0..width).step_by(2) {
+            let x0 = x;
+            let x1 = (x + 1).min(width - 1);
+
+            // Red at (x, y): center-weighted filter across 2x2 cell
+            let r00 = get_rgb(x0, y, 0);
+            let r01 = get_rgb(x1, y, 0);
+            let r10 = get_rgb(x0, y + 1, 0);
+            let r11 = get_rgb(x1, y + 1, 0);
+            let r_filtered = ((r00 * 4 + r01 * 2 + r10 * 2 + r11 + 4) / 9) as u16;
+            bayer[y0_w + x0] = r_filtered;
+
+            // Green 1 at (x+1, y)
+            if x + 1 < width {
+                let g00 = get_rgb(x0, y, 1);
+                let g01 = get_rgb(x1, y, 1);
+                let g10 = get_rgb(x0, y + 1, 1);
+                let g11 = get_rgb(x1, y + 1, 1);
+                let g1_filtered = ((g01 * 4 + g00 * 2 + g11 * 2 + g10 + 4) / 9) as u16;
+                bayer[y0_w + x1] = g1_filtered;
             }
-        } else {
-            for x in (0..width).step_by(2) {
-                bayer[y_w + x] = rgb_u16[y_rgb + x * 3 + 1];
-                if x + 1 < width {
-                    bayer[y_w + x + 1] = rgb_u16[y_rgb + (x + 1) * 3 + 2];
-                }
+
+            // Green 2 at (x, y+1)
+            if y + 1 < height {
+                let g00 = get_rgb(x0, y, 1);
+                let g01 = get_rgb(x1, y, 1);
+                let g10 = get_rgb(x0, y + 1, 1);
+                let g11 = get_rgb(x1, y + 1, 1);
+                let g2_filtered = ((g10 * 4 + g00 * 2 + g11 * 2 + g01 + 4) / 9) as u16;
+                bayer[y1_w + x0] = g2_filtered;
+            }
+
+            // Blue at (x+1, y+1)
+            if x + 1 < width && y + 1 < height {
+                let b00 = get_rgb(x0, y, 2);
+                let b01 = get_rgb(x1, y, 2);
+                let b10 = get_rgb(x0, y + 1, 2);
+                let b11 = get_rgb(x1, y + 1, 2);
+                let b_filtered = ((b11 * 4 + b01 * 2 + b10 * 2 + b00 + 4) / 9) as u16;
+                bayer[y1_w + x1] = b_filtered;
             }
         }
     }
