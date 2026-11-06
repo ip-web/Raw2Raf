@@ -1,6 +1,6 @@
 [package]
 name = "raw2raf"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2021"
 authors = ["IPWeb"]
 description = "Fast RAW to Fujifilm GFX 100S II RAF converter in Rust"
