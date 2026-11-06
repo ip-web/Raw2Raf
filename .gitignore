@@ -1,0 +1,59 @@
+# Rust build artifacts
+target/
+**/*.rs.bk
+
+# Executables & binary tools
+*.exe
+exiftool_files/
+dnglab.exe
+exiftool.exe
+
+# Test files & large media
+test_files/
+test_output/
+*.raf
+*.RAF
+*.dng
+*.DNG
+*.arw
+*.ARW
+*.cr2
+*.CR2
+*.cr3
+*.CR3
+*.crw
+*.CRW
+*.nef
+*.NEF
+*.nrw
+*.NRW
+*.orf
+*.ORF
+*.rw2
+*.RW2
+*.srf
+*.SRF
+*.sr2
+*.SR2
+*.ppm
+*.jpg
+*.jpeg
+*.xmp
+
+# Containers (Fujifilm reference files - provide download / setup instructions in README)
+container/
+DSCF0260.RAF
+
+# Python & scratch caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# IDE & OS files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.vscode/
+.idea/
