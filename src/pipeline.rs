@@ -2,7 +2,6 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Arc;
 use anyhow::{anyhow, Context, Result};
 use tempfile::Builder;
@@ -111,7 +110,11 @@ impl Converter {
         auto_container: bool,
     ) -> Result<Self> {
         let dnglab_path = find_executable("dnglab", dnglab_override);
-        let exiftool_path = find_executable("exiftool", exiftool_override);
+        let exiftool_path = if let Some(override_val) = exiftool_override {
+            find_executable("exiftool", Some(override_val))
+        } else {
+            None
+        };
 
         let templates = resolve_container_templates(container_inputs, auto_container)?;
 
@@ -140,7 +143,7 @@ impl Converter {
     pub fn convert_to_dng<P1: AsRef<Path>, P2: AsRef<Path>>(&self, input_raw: P1, output_dng: P2) -> Result<()> {
         let dnglab = self.dnglab_path.as_ref()
             .ok_or_else(|| anyhow!("dnglab executable not found for DNG generation."))?;
-        let mut cmd = Command::new(dnglab);
+        let mut cmd = crate::create_hidden_command(dnglab);
         cmd.args([
             "convert",
             "--compression", "uncompressed",
@@ -170,7 +173,7 @@ impl Converter {
         if let Some(ref dnglab) = self.dnglab_path {
             if let Ok(td) = Builder::new().prefix("verify_").tempdir() {
                 let test_dng = td.path().join("verify_check.dng");
-                let mut cmd = Command::new(dnglab);
+                let mut cmd = crate::create_hidden_command(dnglab);
                 cmd.args(["convert", "-f"]);
                 cmd.arg(raf_path.as_ref());
                 cmd.arg(&test_dng);
@@ -401,7 +404,7 @@ impl Converter {
 fn find_executable(name: &str, explicit: Option<&str>) -> Option<PathBuf> {
     if let Some(p) = explicit {
         let pb = PathBuf::from(p);
-        if pb.exists() {
+        if pb.is_file() {
             return Some(pb);
         }
     }
@@ -409,7 +412,7 @@ fn find_executable(name: &str, explicit: Option<&str>) -> Option<PathBuf> {
     // Check current directory
     let ext = if cfg!(windows) { ".exe" } else { "" };
     let local = PathBuf::from(format!("{}{}", name, ext));
-    if local.exists() {
+    if local.is_file() {
         return Some(local.canonicalize().unwrap_or(local));
     }
 
@@ -417,37 +420,21 @@ fn find_executable(name: &str, explicit: Option<&str>) -> Option<PathBuf> {
     if let Ok(exe_path) = std::env::current_exe() {
         if let Some(parent) = exe_path.parent() {
             let next_to_exe = parent.join(format!("{}{}", name, ext));
-            if next_to_exe.exists() {
+            if next_to_exe.is_file() {
                 return Some(next_to_exe);
             }
         }
     }
 
-    // Check system PATH via which / where
-    #[cfg(windows)]
-    {
-        if let Ok(output) = Command::new("where").arg(name).output() {
-            if output.status.success() {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                if let Some(first_line) = stdout.lines().next() {
-                    let pb = PathBuf::from(first_line.trim());
-                    if pb.exists() {
-                        return Some(pb);
-                    }
-                }
-            }
-        }
-    }
-    #[cfg(not(windows))]
-    {
-        if let Ok(output) = Command::new("which").arg(name).output() {
-            if output.status.success() {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                if let Some(first_line) = stdout.lines().next() {
-                    let pb = PathBuf::from(first_line.trim());
-                    if pb.exists() {
-                        return Some(pb);
-                    }
+    // Check system PATH via direct environment inspection (fast in-process, zero subprocesses, zero windows)
+    if let Ok(path_var) = std::env::var("PATH") {
+        let sep = if cfg!(windows) { ';' } else { ':' };
+        for dir in path_var.split(sep) {
+            let trimmed = dir.trim();
+            if !trimmed.is_empty() {
+                let candidate = PathBuf::from(trimmed).join(format!("{}{}", name, ext));
+                if candidate.is_file() {
+                    return Some(candidate);
                 }
             }
         }

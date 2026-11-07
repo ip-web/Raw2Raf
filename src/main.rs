@@ -1,22 +1,14 @@
 //! RAW to RAF Converter in Rust
 //! High-performance conversion of camera RAW files to Fujifilm GFX 100S II RAF files.
 
-mod batch;
-mod jpeg;
-mod metadata;
-mod pipeline;
-mod repack;
-mod template;
-mod tiff;
-
 use std::path::PathBuf;
 use std::process;
 use std::str::FromStr;
 use clap::Parser;
 
-use crate::batch::{run_batch, BatchOptions};
-use crate::pipeline::{ConvertFileOptions, Converter};
-use crate::repack::RepackMode;
+use raw2raf_ffi::batch::{run_batch, BatchOptions};
+use raw2raf_ffi::pipeline::{ConvertFileOptions, Converter};
+use raw2raf_ffi::repack::RepackMode;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -71,6 +63,10 @@ struct Cli {
     #[arg(long, value_name = "PATH")]
     dnglab: Option<String>,
 
+    /// Path to exiftool executable
+    #[arg(long, value_name = "PATH")]
+    exiftool: Option<String>,
+
     /// Path(s) or directory of reference Fujifilm RAF container files (e.g. --container container/ or multiple files, default: container/ folder or DSCF0260.RAF).
     #[arg(long, value_name = "PATH", alias = "template", num_args = 1.., value_delimiter = ',')]
     container: Vec<String>,
@@ -124,7 +120,7 @@ fn main() {
     let converter = match Converter::new(
         cli.dnglab.as_deref(),
         &cli.container,
-        None,
+        cli.exiftool.as_deref(),
         cli.auto_container,
     ) {
         Ok(c) => c,

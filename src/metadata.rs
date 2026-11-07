@@ -1,7 +1,6 @@
 //! Metadata transfer from source RAW to output RAF using exiftool.
 
 use std::path::Path;
-use std::process::Command;
 use anyhow::{Context, Result};
 
 pub const METADATA_TAGS: &[&str] = &[
@@ -61,7 +60,7 @@ pub fn transfer_metadata<P1: AsRef<Path>, P2: AsRef<Path>>(
     let source_ref = source_raw.as_ref();
     let output_ref = output_raf.as_ref();
 
-    let mut cmd = Command::new(exiftool_path);
+    let mut cmd = crate::create_hidden_command(exiftool_path);
     cmd.args(["-overwrite_original", "-P", "-n", "-F", "-m", "-q"]);
 
     // Reset default orientation on both IFD0 and IFD1 to Horizontal (1)
@@ -99,14 +98,14 @@ pub fn transfer_metadata<P1: AsRef<Path>, P2: AsRef<Path>>(
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stderr_trimmed = stderr.trim();
 
-    let has_hard_error = stderr_trimmed.lines().any(|line| {
+    let has_hard_error = !output.status.success() || stderr_trimmed.lines().any(|line| {
         let l = line.trim_start();
         l.starts_with("Error:") && !l.contains("Warning")
     });
 
     if has_hard_error {
-        eprintln!("    -> [WARNING] exiftool metadata transfer failed: {}", stderr_trimmed);
-        return Ok(false);
+        eprintln!("    -> [ERROR] exiftool metadata transfer failed (status={:?}): {}", output.status, stderr_trimmed);
+        return Err(anyhow::anyhow!("exiftool metadata transfer failed: {}", stderr_trimmed));
     }
 
     if !stderr_trimmed.is_empty() {
@@ -119,7 +118,7 @@ pub fn transfer_metadata<P1: AsRef<Path>, P2: AsRef<Path>>(
 
 /// Query camera white balance multipliers via exiftool for formats where rawler does not extract WB.
 pub fn read_camera_wb_via_exiftool<P: AsRef<Path>>(source_raw: P, exiftool_path: &str) -> Option<(f64, f64)> {
-    let output = Command::new(exiftool_path)
+    let output = crate::create_hidden_command(exiftool_path)
         .args([
             "-s", "-s", "-s",
             "-WBRedAsShot", "-WBGreenAsShot", "-WBBlueAsShot",
